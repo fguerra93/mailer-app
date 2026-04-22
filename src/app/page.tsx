@@ -1,65 +1,175 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useState } from "react";
+import { MetricsCards } from "@/components/dashboard/metrics-cards";
+import { RateLimitCard } from "@/components/dashboard/rate-limit-card";
+import { EnviosChart } from "@/components/dashboard/envios-chart";
+import { Skeleton } from "@/components/ui/skeleton";
+import { supabase } from "@/lib/supabase";
+import { mostrarErrorToast } from "@/components/layout/error-toast";
+import { ERRORES } from "@/lib/errors";
+import type { MetricasDiarias, RateLimit } from "@/lib/types";
+
+export default function DashboardPage() {
+  const [cargando, setCargando] = useState(true);
+  const [enviadosHoy, setEnviadosHoy] = useState(0);
+  const [enviadosMes, setEnviadosMes] = useState(0);
+  const [fallidosHoy, setFallidosHoy] = useState(0);
+  const [tasaExito, setTasaExito] = useState(100);
+  const [chartData, setChartData] = useState<MetricasDiarias[]>([]);
+  const [rateLimit, setRateLimit] = useState<RateLimit>({
+    proveedor: "Resend",
+    limite_diario: 100,
+    usados_hoy: 0,
+    limite_mensual: 3000,
+    usados_mes: 0,
+  });
+
+  useEffect(() => {
+    cargarMetricas();
+  }, []);
+
+  async function cargarMetricas() {
+    setCargando(true);
+    try {
+      const hoy = new Date().toISOString().split("T")[0];
+      const inicioMes = new Date(
+        new Date().getFullYear(),
+        new Date().getMonth(),
+        1
+      ).toISOString();
+      const hace7Dias = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split("T")[0];
+
+      // Envíos de hoy
+      const { data: hoyData, error: e1 } = await supabase
+        .from("envios")
+        .select("estado")
+        .gte("fecha", hoy);
+
+      if (e1) throw e1;
+
+      const envHoy = (hoyData || []).filter((e) => e.estado === "enviado").length;
+      const falHoy = (hoyData || []).filter((e) => e.estado === "fallido").length;
+      setEnviadosHoy(envHoy);
+      setFallidosHoy(falHoy);
+
+      // Envíos del mes
+      const { data: mesData, error: e2 } = await supabase
+        .from("envios")
+        .select("estado")
+        .gte("fecha", inicioMes);
+
+      if (e2) throw e2;
+
+      const envMes = (mesData || []).filter((e) => e.estado === "enviado").length;
+      setEnviadosMes(envMes);
+
+      // Tasa de éxito
+      const total = (hoyData || []).length;
+      setTasaExito(total > 0 ? Math.round((envHoy / total) * 100) : 100);
+
+      // Rate limit
+      setRateLimit((prev) => ({
+        ...prev,
+        usados_hoy: envHoy,
+        usados_mes: envMes,
+      }));
+
+      // Gráfica últimos 7 días
+      const { data: semanaData, error: e3 } = await supabase
+        .from("envios")
+        .select("fecha, estado")
+        .gte("fecha", hace7Dias);
+
+      if (e3) throw e3;
+
+      const agrupado: Record<string, { enviados: number; fallidos: number }> = {};
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+        const key = d.toLocaleDateString("es-ES", { day: "2-digit", month: "short" });
+        agrupado[key] = { enviados: 0, fallidos: 0 };
+      }
+
+      (semanaData || []).forEach((envio) => {
+        const d = new Date(envio.fecha);
+        const key = d.toLocaleDateString("es-ES", { day: "2-digit", month: "short" });
+        if (agrupado[key]) {
+          if (envio.estado === "enviado") agrupado[key].enviados++;
+          else if (envio.estado === "fallido") agrupado[key].fallidos++;
+        }
+      });
+
+      setChartData(
+        Object.entries(agrupado).map(([fecha, v]) => ({
+          fecha,
+          enviados: v.enviados,
+          fallidos: v.fallidos,
+        }))
+      );
+    } catch (err) {
+      // Si Supabase no está configurado, mostrar datos vacíos
+      if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+        setChartData([
+          { fecha: "16 abr", enviados: 0, fallidos: 0 },
+          { fecha: "17 abr", enviados: 0, fallidos: 0 },
+          { fecha: "18 abr", enviados: 0, fallidos: 0 },
+          { fecha: "19 abr", enviados: 0, fallidos: 0 },
+          { fecha: "20 abr", enviados: 0, fallidos: 0 },
+          { fecha: "21 abr", enviados: 0, fallidos: 0 },
+          { fecha: "22 abr", enviados: 0, fallidos: 0 },
+        ]);
+      } else {
+        mostrarErrorToast(
+          ERRORES.SUPABASE_ERROR(
+            err instanceof Error ? err.message : "Error desconocido"
+          )
+        );
+      }
+    }
+    setCargando(false);
+  }
+
+  if (cargando) {
+    return (
+      <div className="space-y-6">
+        <h2 className="text-2xl font-bold">Dashboard</h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[...Array(4)].map((_, i) => (
+            <Skeleton key={i} className="h-[120px] rounded-xl" />
+          ))}
+        </div>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Skeleton className="h-[350px] rounded-xl lg:col-span-2" />
+          <Skeleton className="h-[350px] rounded-xl" />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold">Dashboard</h2>
+        <p className="text-muted-foreground">
+          Resumen de tu actividad de envío de correos.
+        </p>
+      </div>
+
+      <MetricsCards
+        enviadosHoy={enviadosHoy}
+        enviadosMes={enviadosMes}
+        fallidosHoy={fallidosHoy}
+        tasaExito={tasaExito}
+      />
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <EnviosChart datos={chartData} />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+        <RateLimitCard rateLimit={rateLimit} />
+      </div>
     </div>
   );
 }
